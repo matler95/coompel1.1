@@ -1,55 +1,44 @@
 #include "config.h"
 #include "MotionSystem.h"
 #include "DisplaySystem.h"
-#include "InputSystem.h"
-#include "FeedbackSystem.h"
+#include "ClimateSystem.h"
 
-// Define the global state
-DeviceState systemState = {0.0f, 0.0f, false};
+DeviceState systemState = {0,0,0,0,0,false,AppMode::FACE};
 
-void taskInput(void* pv) {
-    bool lastButtonState = false;
-
-    for(;;) {
-        InputSystem::getInstance().update();
-
-        // Edge Detection: Trigger only when button goes from HIGH to LOW
-        if (systemState.buttonPressed && !lastButtonState) {
-            FeedbackSystem::getInstance().playClick();
-        }
-        lastButtonState = systemState.buttonPressed;
-
-        vTaskDelay(pdMS_TO_TICKS(20)); 
-    }
-}
-
-void taskMotion(void* pv) {
+void taskSensors(void* pv) {
     for(;;) {
         MotionSystem::getInstance().update();
-        vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz Update rate
+        ClimateSystem::getInstance().update();
+        
+        int pot = analogRead(PIN_POTENTIOMETER);
+        systemState.potValue = pot;
+        AppMode newMode = (pot > 2048) ? AppMode::CLIMATE : AppMode::FACE;
+        
+        if(newMode != systemState.currentMode) {
+            systemState.currentMode = newMode;
+            DisplaySystem::getInstance().setAppMode(newMode);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
-void taskDisplay(void* pv) {
+void taskUI(void* pv) {
     for(;;) {
-        // Draw face based on current sensor state
-        DisplaySystem::getInstance().drawFace(systemState.roll, systemState.pitch);
-        vTaskDelay(pdMS_TO_TICKS(33)); // ~30 FPS
+        DisplaySystem::getInstance().updateFace(systemState.roll, systemState.pitch);
+        DisplaySystem::getInstance().updateClimate(systemState.temp, systemState.hum);
+        DisplaySystem::getInstance().updateUI();
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void setup() {
     Serial.begin(115200);
-    
-    // Init Managers
     MotionSystem::getInstance().begin();
+    ClimateSystem::getInstance().begin();
     DisplaySystem::getInstance().begin();
-    InputSystem::getInstance().begin();
 
-    // Create Tasks
-    xTaskCreate(taskMotion,  "Motion", 2048, NULL, 2, NULL);
-    xTaskCreate(taskInput,   "Input",  2048, NULL, 2, NULL);
-    xTaskCreate(taskDisplay, "Display", 4096, NULL, 1, NULL); 
+    xTaskCreate(taskSensors, "Sensors", 4096, NULL, 2, NULL);
+    xTaskCreate(taskUI, "UI", 8192, NULL, 1, NULL);
 }
 
-void loop() { vTaskDelete(NULL); } // Deletes the setup task to free RAM
+void loop() { vTaskDelete(NULL); }
